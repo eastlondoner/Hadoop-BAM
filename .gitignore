@@ -5,3 +5,7 @@
 .idea
 *.iml
 maven-metadata-local.xml
+/gradle
+/.gradle
+/build
+/target
