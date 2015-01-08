@@ -139,7 +139,12 @@ public class VCFRecordReader
 		if (!it.hasNext() || it.getPosition() >= length)
 			return false;
 
-		String line = it.next();
+		String line;
+        //Skip over empty lines (these most commonly occur at the end of a vcf file
+        do {
+            line = it.next();
+        } while (line.isEmpty() && it.hasNext());
+        if(line.isEmpty()) return false;
 
         VariantContext v;
         try {
