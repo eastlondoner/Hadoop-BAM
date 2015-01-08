@@ -35,6 +35,7 @@ import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.input.FileSplit;
 import htsjdk.tribble.FeatureCodecHeader;
+import htsjdk.tribble.TribbleException;
 import htsjdk.tribble.readers.AsciiLineReader;
 import htsjdk.tribble.readers.AsciiLineReaderIterator;
 import htsjdk.variant.variantcontext.VariantContext;
@@ -68,6 +69,7 @@ public class VCFRecordReader
 
 	private final Map<String,Integer> contigDict =
 		new HashMap<String,Integer>();
+    private FSDataInputStream ins;
 
 	@Override public void initialize(InputSplit spl, TaskAttemptContext ctx)
 		throws IOException
@@ -79,11 +81,11 @@ public class VCFRecordReader
 		final Path file = split.getPath();
 		final FileSystem fs = file.getFileSystem(ContextUtil.getConfiguration(ctx));
 
-		final FSDataInputStream ins = fs.open(file);
+        ins = fs.open(file);
 
 		reader = new AsciiLineReader(ins);
         it = new AsciiLineReaderIterator(reader);
-		
+
 		final Object h = codec.readHeader(it);
 		if (!(h instanceof FeatureCodecHeader) || !(((FeatureCodecHeader)h).getHeaderValue() instanceof VCFHeader))
 			throw new IOException("No VCF header found in "+ file);
@@ -116,7 +118,15 @@ public class VCFRecordReader
                 throw new IOException("Empty VCF file "+ file);
         }
 	}
-	@Override public void close() { reader.close(); }
+
+    @Override public void close() {
+        reader.close();
+        try {
+            ins.close();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
 	@Override public float getProgress() {
 		return length == 0 ? 1 : (float)reader.getPosition() / length;
@@ -129,8 +139,22 @@ public class VCFRecordReader
 		if (!it.hasNext() || it.getPosition() >= length)
 			return false;
 
-		final String line = it.next();
-		final VariantContext v = codec.decode(line);
+		String line = it.next();
+
+        VariantContext v;
+        try {
+            v = codec.decode(line);
+        } catch (TribbleException originalException){
+            //Sometimes, for whatever reason, in large files this returns partial lines
+            //if that has happened then getting the remaining part of the line and appending it to the first part solves the problem
+            ins.seekToNewSource(reader.getPosition());
+            line = line + it.next();
+            try{
+                v = codec.decode(line);
+            } catch (Exception newException){
+                throw originalException;
+            }
+        }
 
 		Integer chromIdx = contigDict.get(v.getChr());
 		if (chromIdx == null)
